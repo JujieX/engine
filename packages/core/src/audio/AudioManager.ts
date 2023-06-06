@@ -8,7 +8,7 @@ export class AudioManager {
   /** @internal */
   private static _listener: GainNode;
 
-  static get context():AudioContext {
+  static get context(): AudioContext {
     if (!AudioManager._context) {
       AudioManager._context = new window.AudioContext();
     }
