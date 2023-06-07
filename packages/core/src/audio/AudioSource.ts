@@ -2,7 +2,7 @@ import { Component } from "../Component";
 import { Entity } from "../Entity";
 import { AudioClip } from "./AudioClip";
 import { AudioManager } from "./AudioManager";
-import { assignmentClone, deepClone, ignoreClone } from "../clone/CloneManager";
+import { deepClone, ignoreClone } from "../clone/CloneManager";
 
 /**
  * Audio Source Component
