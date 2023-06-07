@@ -1,53 +1,69 @@
-import { MathUtil, Matrix } from "@galacean/engine-math";
 import { Component } from "../Component";
 import { Entity } from "../Entity";
 import { AudioClip } from "./AudioClip";
 import { AudioManager } from "./AudioManager";
+import { deepClone, ignoreClone } from "../clone/CloneManager";
 import { TransformModifyFlags } from "../Transform";
-import { ignoreClone } from "../clone/CloneManager";
 
 /**
- * Audio Source Component
+ * Positional Audio Source Component
  */
 export class PositionalAudioSource extends Component {
-  /** Whether the sound is playing or not */
+  @ignoreClone
+  /** Whether the clip playing right now */
   isPlaying: Readonly<boolean>;
-  /** whether the sound must be replayed when the end is reached. Default false */
+  @deepClone
+  /** Whether the audio clip looping. Default false */
   loop: boolean = false;
-  /** Fired when the sound has stopped playing, either because it's reached a predetermined stop time, the full duration of the audio has been performed, or because the entire audio has been played. */
-  onPlayEnd: () => any;
+  @deepClone
+  /** If set to true, the audio source will automatically start playing on awake. */
+  playOnAwake: boolean = false;
 
+  @ignoreClone
   private _clip: AudioClip;
-  private _context: AudioContext;
+  @deepClone
   private _gainNode: GainNode;
+  @deepClone
   private _pannerNode: PannerNode;
+  @ignoreClone
   private _sourceNode: AudioBufferSourceNode;
 
+  @deepClone
   private _startTime: number = 0;
+  @deepClone
   private _pausedTime: number = null;
+  @deepClone
   private _endTime: number = null;
+  @deepClone
   private _duration: number = null;
+  @ignoreClone
   private _absoluteStartTime: number;
 
-  private _currRepeatTimes: number = 1;
-  private _repeatTimes: number = 1;
+  @deepClone
   private _volume: number = 1;
-  private _mute: boolean = false;
+  @deepClone
+  private _lastVolume: number = 1;
+  @deepClone
   private _playbackRate: number = 1;
 
-  private _distanceModelSetting: DistanceSetting;
-  private _directionModelSetting: DirectionSetting;
-
-  /** The audio asset to be played */
+  /**
+   * The audio cilp to play
+   */
   get clip(): AudioClip {
     return this._clip;
   }
 
   set clip(value: AudioClip) {
-    this._clip = value;
+    const lastClip = this._clip;
+    if (lastClip !== value) {
+      lastClip && lastClip._addReferCount(-1);
+      this._clip = value;
+    }
   }
 
-  /** the volume, should be positive. Default 1*/
+  /**
+   * The volume of the audio source. 1.0 is origin volume.
+   */
   get volume(): number {
     return this._volume;
   }
@@ -55,11 +71,13 @@ export class PositionalAudioSource extends Component {
   set volume(value: number) {
     this._volume = value;
     if (this.isPlaying) {
-      this._gainNode.gain.setValueAtTime(value, this._context.currentTime);
+      this._gainNode.gain.setValueAtTime(value, AudioManager.context.currentTime);
     }
   }
 
-  /** Speed factor at which the sound will be played. Default 1 */
+  /**
+   * The playback speed of the audio source, 1.0 is normal playback speed.
+   */
   get playbackRate(): number {
     return this._playbackRate;
   }
@@ -71,29 +89,26 @@ export class PositionalAudioSource extends Component {
     }
   }
 
-  /** whether is muted or not */
+  /**
+   * Mutes / Unmutes the AudioSource.
+   * Mute sets the volume = 0, Un-Mute restore the original volume.
+   */
   get mute(): boolean {
-    return this._mute;
+    return this.volume === 0;
   }
 
   set mute(value: boolean) {
-    this._mute = value;
     if (value) {
+      this._lastVolume = this.volume;
       this.volume = 0;
+    } else {
+      this.volume = this._lastVolume;
     }
   }
 
-  /** repeat times, default 1, should be positive integer */
-  get repeatTimes(): number {
-    return this._repeatTimes;
-  }
-
-  set repeatTimes(value: number) {
-    this._repeatTimes = MathUtil.clamp(Math.abs(Math.ceil(value)), 1, Infinity);
-    this._currRepeatTimes = this._repeatTimes;
-  }
-
-  /** The time, in seconds, at which the sound should begin to play. Default 0 */
+  /**
+   * The time, in seconds, at which the sound should begin to play. Default 0.
+   */
   get startTime(): number {
     return this._startTime;
   }
@@ -102,7 +117,9 @@ export class PositionalAudioSource extends Component {
     this._startTime = value;
   }
 
-  /** The time, in seconds, at which the sound should stop to play. */
+  /**
+   * The time, in seconds, at which the sound should stop to play.
+   */
   get endTime(): number {
     return this._endTime;
   }
@@ -113,38 +130,90 @@ export class PositionalAudioSource extends Component {
   }
 
   /**
-   * positional audio distance setting
+   * The spatialization algorithm to use to position the audio in 3D space.
+   * Default equal power.
    */
-  get distanceSetting(): DistanceSetting {
-    return this._distanceModelSetting;
+  get PanningMode(): PanningModelType {
+    return this._pannerNode.panningModel;
   }
 
-  set distanceSetting(value: DistanceSetting) {
-    this._pannerNode.distanceModel = value.DistanceModel;
-    this._pannerNode.panningModel = value.PanningMode;
-    this._pannerNode.maxDistance = value.maxDistance;
-    this._pannerNode.refDistance = value.minDistance;
-
-    this._distanceModelSetting = value;
+  set PanningMode(value: PanningModelType) {
+    this._pannerNode.panningModel = value;
   }
 
   /**
-   * positional audio direction setting
+   * The algorithm to use to reduce the volume of the audio source as it moves away from the listener.
+   * Default inverse.
    */
-  get directionSetting() {
-    return this._directionModelSetting;
+  get distanceModel(): DistanceModelType {
+    return this._pannerNode.distanceModel;
   }
 
-  set directionSetting(value: DirectionSetting) {
-    this._directionModelSetting = value;
-
-    this._pannerNode.coneInnerAngle = value.innerAngle;
-    this._pannerNode.coneOuterAngle = value.outerAngle;
-    this._pannerNode.coneOuterGain = value.outerVolum;
+  set distanceModel(value: DistanceModelType) {
+    this._pannerNode.distanceModel = value;
   }
 
-  /** Current playback progress, in seconds */
-  get position(): number {
+  /**
+   * The minimum distance which the volume start to reduce.
+   */
+  get minDistance(): number {
+    return this._pannerNode.refDistance;
+  }
+
+  set minDistance(value: number) {
+    this._pannerNode.refDistance = value;
+  }
+  /**
+   * The maximum distance beyond which the volume is not reduced any further.
+   */
+  get maxDistance(): number {
+    return this._pannerNode.maxDistance;
+  }
+
+  set maxDistance(value: number) {
+    this._pannerNode.maxDistance = value;
+  }
+
+  /**
+   * Direcitonal audio clip.
+   * The angle, in degrees, of a cone inside of which there will be no volume reduction.
+   */
+  get innerAngle(): number {
+    return this._pannerNode.coneInnerAngle;
+  }
+
+  set innerAngle(value: number) {
+    this._pannerNode.coneInnerAngle = value;
+  }
+
+  /**
+   * Directional audio clip.
+   * The angle, in degrees, of a cone outside of which the volume will be reduced by a constant value.
+   */
+  get outerAngle(): number {
+    return this._pannerNode.coneOuterAngle;
+  }
+
+  set outerAngle(value: number) {
+    this._pannerNode.coneOuterAngle = value;
+  }
+
+  /**
+   * Directional audio clip.
+   * The volume outside the cone defined by the coneOuterAngle. Default 0, meaning that no sound can be heard.
+   */
+  get outerVolume(): number {
+    return this._pannerNode.coneOuterGain;
+  }
+
+  set outerVolume(value: number) {
+    this._pannerNode.coneOuterGain = value;
+  }
+
+  /**
+   * Playback position in seconds.
+   */
+  get time(): number {
     if (this.isPlaying) {
       return this._pausedTime
         ? this.engine.time.elapsedTime - this._absoluteStartTime + this._pausedTime
@@ -153,23 +222,10 @@ export class PositionalAudioSource extends Component {
     return 0;
   }
 
-  /** @internal */
-  constructor(entity: Entity) {
-    super(entity);
-    this._onPlayEnd = this._onPlayEnd.bind(this);
-
-    this._context = AudioManager.context;
-
-    this._pannerNode = AudioManager.context.createPanner();
-    this._pannerNode.connect(this._gainNode);
-    this._gainNode.connect(AudioManager.listener);
-
-    this._onTransformChanged = this._onTransformChanged.bind(this);
-    this._registerEntityTransformListener();
-  }
-
-  /** play the sound from the very beginning */
-  public play() {
+  /**
+   * Plays the clip.
+   */
+  play(): void {
     if (!this._clip || !this.clip.duration || this.isPlaying) return;
     if (this.startTime > this._clip.duration || this.startTime < 0) return;
     if (this._duration && this._duration < 0) return;
@@ -178,17 +234,21 @@ export class PositionalAudioSource extends Component {
     this._play(this.startTime, this._duration);
   }
 
-  /** stop play the sound */
-  public stop() {
+  /**
+   * Stops playing the clip.
+   */
+  stop(): void {
     if (this._sourceNode && this.isPlaying) {
       this._sourceNode.stop();
-      this._currRepeatTimes = 1;
     }
   }
-  /** pause playing */
-  public pause() {
+
+  /**
+   * Pauses playing the clip.
+   */
+  pause(): void {
     if (this._sourceNode && this.isPlaying) {
-      this._pausedTime = this.position;
+      this._pausedTime = this.time;
 
       this.isPlaying = false;
 
@@ -198,16 +258,76 @@ export class PositionalAudioSource extends Component {
     }
   }
 
-  /** resume playing, if is paused */
-  public resume() {
+  /**
+   * Unpause the paused playback of this AudioSource.
+   */
+  unPause(): void {
     if (!this.isPlaying && this._pausedTime) {
       const duration = this.endTime ? this.endTime - this._pausedTime : null;
       this._play(this._pausedTime, duration);
     }
   }
 
-  private _play(startTime: number, duration: number | null) {
-    const source = this._context.createBufferSource();
+  /** @internal */
+  constructor(entity: Entity) {
+    super(entity);
+    this._onPlayEnd = this._onPlayEnd.bind(this);
+
+    this._pannerNode = AudioManager.context.createPanner();
+    this._pannerNode.connect(this._gainNode);
+    this._gainNode.connect(AudioManager.listener);
+
+    this._onTransformChanged = this._onTransformChanged.bind(this);
+    this._registerEntityTransformListener();
+  }
+
+  override _onAwake(): void {
+    this.playOnAwake && this._clip && this.play();
+  }
+
+  /**
+   * @internal
+   */
+  override _onEnable(): void {
+    this._clip && this.unPause();
+  }
+
+  /**
+   * @internal
+   */
+  override _onDisable(): void {
+    this._clip && this.pause();
+  }
+
+  /**
+   * @internal
+   */
+  protected override _onDestroy(): void {
+    super._onDestroy();
+    if (this._clip) {
+      this._clip._addReferCount(-1);
+      this._clip = null;
+    }
+
+    this.entity.transform._updateFlagManager.removeListener(this._onTransformChanged);
+  }
+
+  /**
+   * @internal
+   */
+  @ignoreClone
+  protected _onTransformChanged(type: TransformModifyFlags) {
+    if ((type & TransformModifyFlags.WmWp) != 0) {
+      this._updatePosition();
+    }
+
+    if ((type & TransformModifyFlags.WmWeWq) != 0) {
+      this._updateOrientation();
+    }
+  }
+
+  private _play(startTime: number, duration: number | null): void {
+    const source = AudioManager.context.createBufferSource();
     source.buffer = this._clip.getData();
     source.onended = this._onPlayEnd;
     source.playbackRate.value = this._playbackRate;
@@ -221,7 +341,7 @@ export class PositionalAudioSource extends Component {
     }
 
     this._gainNode.gain.setValueAtTime(this._volume, 0);
-    source.connect(this._pannerNode);
+    source.connect(this._gainNode);
 
     duration ? source.start(0, startTime, duration) : source.start(0, startTime);
 
@@ -230,71 +350,32 @@ export class PositionalAudioSource extends Component {
     this.isPlaying = true;
   }
 
-  private _onPlayEnd() {
+  private _onPlayEnd(): void {
     if (!this.isPlaying) return;
     this.isPlaying = false;
-    if (this._currRepeatTimes === 1) {
-      this._currRepeatTimes = this._repeatTimes;
-      this._sourceNode.disconnect();
-      this._sourceNode = null;
-      this._pausedTime = null;
-      this.onPlayEnd && this.onPlayEnd();
-      return;
-    }
-    if (this._currRepeatTimes > 1) {
-      this._currRepeatTimes--;
-      this.play();
-    }
-  }
-
-  /**
-   * @internal
-   */
-  protected override _onDestroy(): void {
-    super._onDestroy();
-    this.entity.transform._updateFlagManager.removeListener(this._onTransformChanged);
-  }
-
-  /**
-   * @internal
-   */
-  @ignoreClone
-  protected _onTransformChanged(type: TransformModifyFlags) {
-    const { _pannerNode: panner } = this;
-    const { position, worldForward } = this.entity.transform;
-    panner.positionX.setValueAtTime(position.x, this._context.currentTime);
-    panner.positionY.setValueAtTime(position.y, this._context.currentTime);
-    panner.positionZ.setValueAtTime(position.z, this._context.currentTime);
-    panner.orientationX.setValueAtTime(worldForward.x, this._context.currentTime);
-    panner.orientationY.setValueAtTime(worldForward.y, this._context.currentTime);
-    panner.orientationZ.setValueAtTime(worldForward.z, this._context.currentTime);
   }
 
   private _registerEntityTransformListener() {
     this.entity.transform._updateFlagManager.addListener(this._onTransformChanged);
   }
-}
 
-enum VolumeRolloff {
-  Linear = "linear",
-  Inverse = "inverse",
-  Exponential = "exponential"
-}
+  private _updatePosition() {
+    const { _pannerNode: panner } = this;
+    const { position } = this.entity.transform;
+    const { context } = AudioManager;
 
-enum PanningMode {
-  Equalpower = "equalpower",
-  HRTF = "HRTF"
-}
+    panner.positionX.setValueAtTime(position.x, context.currentTime);
+    panner.positionY.setValueAtTime(position.y, context.currentTime);
+    panner.positionZ.setValueAtTime(position.z, context.currentTime);
+  }
 
-interface DistanceSetting {
-  minDistance: number;
-  maxDistance: number;
-  DistanceModel: VolumeRolloff;
-  PanningMode: PanningMode;
-}
+  private _updateOrientation() {
+    const { _pannerNode: panner } = this;
+    const { worldForward } = this.entity.transform;
+    const { context } = AudioManager;
 
-interface DirectionSetting {
-  innerAngle: number;
-  outerAngle: number;
-  outerVolum: number;
+    panner.orientationX.setValueAtTime(worldForward.x, context.currentTime);
+    panner.orientationY.setValueAtTime(worldForward.y, context.currentTime);
+    panner.orientationZ.setValueAtTime(worldForward.z, context.currentTime);
+  }
 }
