@@ -29,7 +29,6 @@ export class AudioListener extends Component {
    */
   @ignoreClone
   protected _onTransformChanged(type: TransformModifyFlags) {
-    console.log("update listener");
     const { position, worldUp, worldForward } = this.entity.transform;
     const { listener, currentTime } = this._context;
 
